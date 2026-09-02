@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
-import { User } from '../App'
+import type { User } from '../App'
 import {
   ArrowLeft, Upload, Bot, Globe, Shield, Clock,
   ExternalLink, Check, AlertCircle, Loader2, ChevronRight, File, Trash2
@@ -232,7 +232,7 @@ export default function ProjectPage({ user: _user }: Props) {
                     <div className="flex gap-4 text-white">
                       <span className="w-16 text-violet-300">A</span>
                       <span className="w-12">@</span>
-                      <span className="text-cyan-300">{process.env.SERVER_IP || 'YOUR_SERVER_IP'}</span>
+                      <span className="text-cyan-300">YOUR_SERVER_IP</span>
                     </div>
                     <div className="flex gap-4 text-white">
                       <span className="w-16 text-violet-300">CNAME</span>

@@ -2,21 +2,19 @@ import { Router, Request } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { PrismaClient } from '@prisma/client';
+import { query, queryOne } from '../db';
 import { requireAuthOrToken } from '../middleware/tokenAuth';
 import { requireAuth } from '../middleware/auth';
 import { generateNginxConfig } from '../services/deploy';
 
 const router = Router();
-const prisma = new PrismaClient();
 type AuthUser = { id: string };
 
-// ─── Multer storage ───────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: async (req, _file, cb) => {
-    const project = await prisma.project.findFirst({ where: { id: req.params.projectId } });
+    const project = await queryOne<{ files_path: string }>('SELECT * FROM projects WHERE id = $1', [req.params.projectId]);
     if (!project) return cb(new Error('Project not found'), '');
-    const stagingDir = path.join(project.filesPath, '.staging');
+    const stagingDir = path.join(project.files_path, '.staging');
     fs.mkdirSync(stagingDir, { recursive: true });
     cb(null, stagingDir);
   },
@@ -25,7 +23,6 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-// ─── Upload files (manual OR AI token) ───────────────────────────────────────
 router.post('/:projectId', requireAuthOrToken, upload.array('files', 500), async (req: Request, res) => {
   const projectId = req.params.projectId;
   const files = req.files as Express.Multer.File[];
@@ -37,55 +34,60 @@ router.post('/:projectId', requireAuthOrToken, upload.array('files', 500), async
 
   if (tokenData) {
     if (tokenData.projectId !== projectId) {
-      res.status(403).json({ error: 'Token is not authorized for this project' }); return;
+      res.status(403).json({ error: 'Token not authorized for this project' }); return;
     }
     uploadedBy = `ai-token:${tokenData.id}`;
     userId = tokenData.userId;
-    await prisma.aIToken.update({ where: { id: tokenData.id }, data: { usedAt: new Date() } });
+    await query('UPDATE ai_tokens SET used_at = NOW() WHERE id = $1', [tokenData.id]);
   } else {
     userId = (req.user as AuthUser).id;
   }
 
-  const project = await prisma.project.findFirst({ where: { id: projectId, userId } });
+  const project = await queryOne<{ id: string; files_path: string; custom_domain: string | null; ssl_enabled: boolean }>(
+    'SELECT * FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]
+  );
   if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
 
   try {
-    const stagingDir = path.join(project.filesPath, '.staging');
+    const stagingDir = path.join(project.files_path, '.staging');
     let totalSize = 0;
-
     for (const entry of fs.readdirSync(stagingDir)) {
       const src = path.join(stagingDir, entry);
-      const dest = path.join(project.filesPath, entry);
+      const dest = path.join(project.files_path, entry);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.renameSync(src, dest);
       totalSize += fs.statSync(dest).size;
     }
-    fs.rmdirSync(stagingDir, { recursive: true } as fs.RmDirOptions);
+    fs.rmdirSync(stagingDir);
 
-    const lastDeploy = await prisma.deployment.findFirst({ where: { projectId }, orderBy: { version: 'desc' } });
+    const lastDeploy = await queryOne<{ version: number }>(
+      'SELECT version FROM deployments WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1', [projectId]
+    );
     const version = (lastDeploy?.version ?? 0) + 1;
 
-    await prisma.deployment.create({
-      data: { projectId, version, uploadedBy, fileCount: files.length, sizeBytes: BigInt(totalSize), status: 'SUCCESS' },
-    });
-    await prisma.project.update({ where: { id: projectId }, data: { status: 'ACTIVE', updatedAt: new Date() } });
+    await query(`
+      INSERT INTO deployments (project_id, version, uploaded_by, file_count, size_bytes, status)
+      VALUES ($1, $2, $3, $4, $5, 'SUCCESS')
+    `, [projectId, version, uploadedBy, files.length, totalSize]);
+
+    await query(`UPDATE projects SET status = 'ACTIVE', updated_at = NOW() WHERE id = $1`, [projectId]);
     await generateNginxConfig(project);
 
-    const siteUrl = project.customDomain ? `https://${project.customDomain}` : null;
     res.json({
       success: true,
       message: `🚀 Deployed ${files.length} file(s) as version ${version}`,
-      version, fileCount: files.length, sizeBytes: totalSize, siteUrl, uploadedBy,
+      version, fileCount: files.length, sizeBytes: totalSize,
+      siteUrl: project.custom_domain ? `https://${project.custom_domain}` : null,
+      uploadedBy,
     });
   } catch (err) {
     res.status(500).json({ error: 'Deployment failed', details: (err as Error).message });
   }
 });
 
-// ─── List deployed files ──────────────────────────────────────────────────────
 router.get('/:projectId/files', requireAuth, async (req: Request, res) => {
   const user = req.user as AuthUser;
-  const project = await prisma.project.findFirst({ where: { id: req.params.projectId, userId: user.id } });
+  const project = await queryOne<{ files_path: string }>('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [req.params.projectId, user.id]);
   if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
 
   const listFiles = (dir: string, base = ''): { name: string; path: string; size: number }[] => {
@@ -95,13 +97,12 @@ router.get('/:projectId/files', requireAuth, async (req: Request, res) => {
       if (f === '.staging') continue;
       const full = path.join(dir, f);
       const rel = base ? `${base}/${f}` : f;
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) results.push(...listFiles(full, rel));
-      else results.push({ name: f, path: rel, size: stat.size });
+      if (fs.statSync(full).isDirectory()) results.push(...listFiles(full, rel));
+      else results.push({ name: f, path: rel, size: fs.statSync(full).size });
     }
     return results;
   };
-  res.json(listFiles(project.filesPath));
+  res.json(listFiles(project.files_path));
 });
 
 export default router;

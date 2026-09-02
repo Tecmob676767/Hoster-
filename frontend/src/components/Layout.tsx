@@ -1,20 +1,20 @@
-import { Outlet, Link, useNavigate } from 'react-router-dom'
-import { User } from '../App'
-import { Zap, LogOut, LayoutDashboard } from 'lucide-react'
+import { Outlet, Link, useNavigate } from 'react-router-dom';
+import type { User } from '../App';
+import { Zap, LogOut, LayoutDashboard } from 'lucide-react';
 
 interface Props {
-  user: User | null
-  setUser: (u: User | null) => void
+  user: User | null;
+  setUser: (u: User | null) => void;
 }
 
 export default function Layout({ user, setUser }: Props) {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
   const handleLogout = async () => {
-    await fetch('http://localhost:4000/auth/logout', { method: 'POST', credentials: 'include' })
-    setUser(null)
-    navigate('/')
-  }
+    await fetch('http://localhost:4000/auth/logout', { method: 'POST', credentials: 'include' });
+    setUser(null);
+    navigate('/');
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
@@ -72,9 +72,9 @@ export default function Layout({ user, setUser }: Props) {
       </nav>
 
       {/* Page content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
         <Outlet />
       </main>
     </div>
-  )
+  );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { User } from '../App'
+import type { User } from '../App'
 import { Plus, Globe, Clock, Zap, Trash2, ExternalLink } from 'lucide-react'
 
 interface Project {

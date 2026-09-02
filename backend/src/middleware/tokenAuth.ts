@@ -1,52 +1,29 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { queryOne } from '../db';
 
 export interface TokenPayload {
-  tokenId: string;
-  projectId: string;
-  userId: string;
+  tokenId: string; projectId: string; userId: string;
 }
 
-/**
- * Middleware that validates AI upload tokens (Bearer JWT).
- * Used on upload routes to allow AI agents to deploy files.
- */
 export async function requireToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({
-      error: 'AI token required. Use: Authorization: Bearer <your-token>',
-    });
+    res.status(401).json({ error: 'AI token required. Use: Authorization: Bearer <token>' });
     return;
   }
-
   const token = authHeader.substring(7);
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET!) as TokenPayload;
+    const dbToken = await queryOne<{
+      id: string; user_id: string; project_id: string;
+      revoked: boolean; expires_at: string;
+    }>('SELECT * FROM ai_tokens WHERE id = $1', [payload.tokenId]);
 
-    // Look up token in DB
-    const dbToken = await prisma.aIToken.findUnique({
-      where: { id: payload.tokenId },
-      include: { project: true, user: true },
-    });
+    if (!dbToken) { res.status(401).json({ error: 'Token not found' }); return; }
+    if (dbToken.revoked) { res.status(401).json({ error: 'Token has been revoked' }); return; }
+    if (new Date() > new Date(dbToken.expires_at)) { res.status(401).json({ error: 'Token has expired' }); return; }
 
-    if (!dbToken) {
-      res.status(401).json({ error: 'Token not found' });
-      return;
-    }
-    if (dbToken.revoked) {
-      res.status(401).json({ error: 'Token has been revoked' });
-      return;
-    }
-    if (new Date() > dbToken.expiresAt) {
-      res.status(401).json({ error: 'Token has expired' });
-      return;
-    }
-
-    // Attach token info to request for use in route handlers
     (req as Request & { tokenData: typeof dbToken }).tokenData = dbToken;
     next();
   } catch {
@@ -54,20 +31,8 @@ export async function requireToken(req: Request, res: Response, next: NextFuncti
   }
 }
 
-/**
- * Middleware that accepts EITHER a session user OR a valid AI token.
- * Used on upload routes to support both manual and AI uploads.
- */
 export async function requireAuthOrToken(req: Request, res: Response, next: NextFunction): Promise<void> {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-
-  // Try token auth
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    return requireToken(req, res, next);
-  }
-
+  if (req.isAuthenticated()) return next();
+  if (req.headers.authorization?.startsWith('Bearer ')) return requireToken(req, res, next);
   res.status(401).json({ error: 'Login required or provide an AI upload token.' });
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { User } from '../App'
+import type { User } from '../App'
 import { ArrowLeft, Bot, Plus, Copy, Check, Trash2, Eye, EyeOff, Clock, AlertCircle, Loader2, Terminal } from 'lucide-react'
 
 interface TokenInfo {

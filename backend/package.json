@@ -21,7 +21,7 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "@prisma/client": "^7.10.0",
+    "@types/pg": "^8.23.1",
     "bcryptjs": "^3.0.3",
     "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.6",
@@ -32,10 +32,11 @@
     "multer": "^2.3.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
-    "prisma": "^8.0.0-rc.12",
+    "pg": "^8.23.0",
     "uuid": "^14.0.2"
   },
   "devDependencies": {
+    "@prisma/cli": "^8.0.0-rc.12",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
