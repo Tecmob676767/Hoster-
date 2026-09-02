@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-[#0a0a0a] text-white;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #111; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #10b981);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow effect */
+.glow {
+  box-shadow: 0 0 30px rgba(139, 92, 246, 0.3);
+}
+
+.glow-sm {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.2);
+}
+
+/* Card hover */
+.card-hover {
+  transition: all 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.15);
+}
+
+/* Animated gradient border */
+@keyframes gradient-border {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.gradient-border {
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #10b981, #8b5cf6);
+  background-size: 300% 300%;
+  animation: gradient-border 4s ease infinite;
+}

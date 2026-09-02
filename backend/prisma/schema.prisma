@@ -1,0 +1,85 @@
+// Prisma schema for Hoster++
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String       @id @default(uuid())
+  googleId    String       @unique
+  email       String       @unique
+  name        String
+  avatar      String?
+  plan        Plan         @default(FREE)
+  projects    Project[]
+  aiTokens    AIToken[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Project {
+  id           String       @id @default(uuid())
+  name         String
+  description  String?
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customDomain String?      @unique
+  sslEnabled   Boolean      @default(false)
+  status       SiteStatus   @default(INACTIVE)
+  filesPath    String
+  deployments  Deployment[]
+  aiTokens     AIToken[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Deployment {
+  id          String       @id @default(uuid())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version     Int
+  uploadedBy  String       // "user" or "ai-token:<tokenId>"
+  fileCount   Int
+  sizeBytes   BigInt
+  status      DeployStatus @default(SUCCESS)
+  createdAt   DateTime     @default(now())
+}
+
+model AIToken {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  token       String       @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  revoked     Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+}
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SiteStatus {
+  ACTIVE
+  INACTIVE
+  BUILDING
+  ERROR
+}
+
+enum DeployStatus {
+  SUCCESS
+  FAILED
+  BUILDING
+}
