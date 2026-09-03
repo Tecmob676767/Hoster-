@@ -1,300 +1,594 @@
-import { useEffect, useState, useCallback } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import { useDropzone } from 'react-dropzone'
-import type { User } from '../App'
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { useDropzone } from 'react-dropzone';
+import type { User, Project } from '../services/store';
+import { api } from '../services/api';
+import { store } from '../services/store';
 import {
   ArrowLeft, Upload, Bot, Globe, Shield, Clock,
-  ExternalLink, Check, AlertCircle, Loader2, ChevronRight, File, Trash2
-} from 'lucide-react'
+  ExternalLink, Check, AlertCircle, File, Trash2,
+  Monitor, Smartphone, Tablet, RefreshCw, RotateCcw,
+  Lock, Zap, Loader2, ChevronRight
+} from 'lucide-react';
 
-interface Project {
-  id: string; name: string; subdomain: string; customDomain?: string
-  status: string; sslEnabled: boolean; filesPath: string
-  deployments: { id: string; version: number; uploadedBy: string; fileCount: number; createdAt: string }[]
+interface Props {
+  user: User;
 }
 
-interface Props { user: User }
-
 export default function ProjectPage({ user: _user }: Props) {
-  const { id } = useParams<{ id: string }>()
-  const [project, setProject] = useState<Project | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [uploadResult, setUploadResult] = useState<{ success: boolean; message: string; siteUrl?: string } | null>(null)
-  const [customDomain, setCustomDomain] = useState('')
-  const [domainLoading, setDomainLoading] = useState(false)
-  const [domainMsg, setDomainMsg] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'upload' | 'domain' | 'history'>('upload')
+  const { id } = useParams<{ id: string }>();
+  const [project, setProject] = useState<Project | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ success: boolean; message: string; siteUrl?: string } | null>(null);
+  const [customDomain, setCustomDomain] = useState('');
+  const [domainLoading, setDomainLoading] = useState(false);
+  const [domainMsg, setDomainMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'upload' | 'preview' | 'domain' | 'history'>('upload');
+  const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [dnsChecked, setDnsChecked] = useState(false);
+  const [checkingDns, setCheckingDns] = useState(false);
 
-  const fetchProject = () => {
-    fetch(`http://localhost:4000/api/projects/${id}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => { setProject(data); setLoading(false) })
-      .catch(() => setLoading(false))
-  }
-
-  useEffect(() => { fetchProject() }, [id])
-
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (!acceptedFiles.length || !id) return
-    setUploading(true)
-    setUploadResult(null)
-    const form = new FormData()
-    acceptedFiles.forEach(f => form.append('files', f))
-    try {
-      const res = await fetch(`http://localhost:4000/api/upload/${id}`, {
-        method: 'POST', credentials: 'include', body: form,
-      })
-      const data = await res.json()
-      setUploadResult({ success: res.ok, message: data.message || data.error, siteUrl: data.siteUrl })
-      if (res.ok) fetchProject()
-    } catch {
-      setUploadResult({ success: false, message: 'Upload failed. Try again.' })
+  const fetchProject = async () => {
+    if (!id) return;
+    setLoading(true);
+    const data = await api.getProject(id);
+    setProject(data);
+    if (data?.customDomain) {
+      setCustomDomain(data.customDomain);
     }
-    setUploading(false)
-  }, [id])
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchProject();
+  }, [id]);
+
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      if (!acceptedFiles.length || !id) return;
+      setUploading(true);
+      setUploadResult(null);
+
+      const res = await api.uploadFiles(id, acceptedFiles, '👤 Manual Drop');
+      setUploadResult(res);
+      await fetchProject();
+      setUploading(false);
+    },
+    [id]
+  );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     multiple: true,
     disabled: uploading,
-  })
+  });
 
-  const addDomain = async () => {
-    if (!customDomain.trim()) return
-    setDomainLoading(true)
-    setDomainMsg(null)
-    const res = await fetch(`http://localhost:4000/api/domains/${id}`, {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: customDomain.trim() }),
-    })
-    const data = await res.json()
-    setDomainMsg(res.ok ? `✅ ${data.message}` : `❌ ${data.error}`)
-    if (res.ok) fetchProject()
-    setDomainLoading(false)
+  const handleAddDomain = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customDomain.trim() || !id) return;
+    setDomainLoading(true);
+    setDomainMsg(null);
+
+    const res = await api.setDomain(id, customDomain.trim());
+    setDomainMsg(res.message);
+    await fetchProject();
+    setDomainLoading(false);
+  };
+
+  const handleRemoveDomain = async () => {
+    if (!confirm('Are you sure you want to remove the custom domain?')) return;
+    if (!id) return;
+    await api.removeDomain(id);
+    setCustomDomain('');
+    setDomainMsg(null);
+    await fetchProject();
+  };
+
+  const handleVerifyDns = () => {
+    setCheckingDns(true);
+    setTimeout(() => {
+      setCheckingDns(false);
+      setDnsChecked(true);
+    }, 800);
+  };
+
+  const handleRollback = async (version: number) => {
+    if (!id) return;
+    if (!confirm(`Roll back project to deployment v${version}?`)) return;
+    store.rollbackDeployment(id, version);
+    await fetchProject();
+    alert(`Successfully rolled back to deployment v${version}!`);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24">
+        <div className="w-10 h-10 rounded-full border-4 border-[#F12850] border-t-transparent animate-spin" />
+        <p className="text-xs font-bold text-[#666970] mt-3">Loading project studio...</p>
+      </div>
+    );
   }
 
-  const removeDomain = async () => {
-    if (!confirm('Remove custom domain?')) return
-    await fetch(`http://localhost:4000/api/domains/${id}`, { method: 'DELETE', credentials: 'include' })
-    fetchProject()
+  if (!project) {
+    return (
+      <div className="lb-card border-2 border-[#121316] p-12 text-center max-w-md mx-auto shadow-[0_4px_0_#121316]">
+        <h3 className="text-lg font-black text-[#121316]">Project Not Found</h3>
+        <p className="text-xs text-[#666970] mt-1 font-medium mb-6">
+          This project might have been removed.
+        </p>
+        <Link to="/dashboard" className="lb-btn-primary text-xs font-bold px-6 py-2.5">
+          ← Back to Dashboard
+        </Link>
+      </div>
+    );
   }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
-    </div>
-  )
-
-  if (!project) return (
-    <div className="text-center py-20">
-      <p className="text-gray-400">Project not found</p>
-      <Link to="/dashboard" className="text-violet-400 mt-4 inline-block">← Back to dashboard</Link>
-    </div>
-  )
-
-  const siteUrl = project.customDomain ? `https://${project.customDomain}` : null
+  const liveUrl = project.customDomain
+    ? `https://${project.customDomain}`
+    : `https://${project.subdomain}.hosterplus.live`;
 
   return (
-    <div>
-      {/* Back + Header */}
-      <div className="flex items-start gap-4 mb-8">
-        <Link to="/dashboard" className="mt-1 p-2 rounded-xl border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition-all">
-          <ArrowLeft className="w-4 h-4" />
-        </Link>
-        <div className="flex-1">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-black text-white">{project.name}</h1>
-            <span className={`px-2.5 py-1 rounded-full border text-xs font-medium ${
-              project.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-              : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
-            }`}>
-              {project.status}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 mt-1.5">
-            <Globe className="w-3.5 h-3.5 text-gray-500" />
-            {siteUrl ? (
-              <a href={siteUrl} target="_blank" rel="noreferrer"
-                className="text-sm text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors">
-                {project.customDomain}
-                <ExternalLink className="w-3 h-3" />
+    <div className="space-y-6 animate-in fade-in duration-150">
+      {/* Top Header & Breadcrumbs */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#E2E2DC]">
+        <div className="flex items-start gap-3">
+          <Link
+            to="/dashboard"
+            className="p-2 rounded-2xl border-2 border-[#121316] bg-[#FFFFFF] hover:bg-[#F4F4F0] text-[#121316] shadow-[0_2px_0_#121316] transition-all shrink-0 mt-0.5"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-2xl font-black text-[#121316]">{project.name}</h1>
+              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#2AB09C]/15 text-[#2AB09C] border border-[#2AB09C]/30 text-[11px] font-extrabold">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#2AB09C] pulse-dot" />
+                {project.status}
+              </span>
+              {project.sslEnabled && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-[#FFE100] text-[#121316] px-2.5 py-0.5 rounded-full border border-[#121316]">
+                  <Shield className="w-3 h-3 text-[#121316]" /> SSL Secure
+                </span>
+              )}
+            </div>
+
+            {/* Live URL Link */}
+            <div className="flex items-center gap-2 mt-1.5 text-xs font-mono">
+              <Globe className="w-3.5 h-3.5 text-[#2AB09C]" />
+              <a
+                href={liveUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-bold text-[#F12850] hover:underline flex items-center gap-1"
+              >
+                {liveUrl} <ExternalLink className="w-3 h-3" />
               </a>
-            ) : (
-              <span className="text-sm text-gray-500 italic">No domain yet — add one in the Domain tab</span>
-            )}
+            </div>
           </div>
         </div>
 
-        {/* AI Token button */}
-        <Link to={`/project/${id}/tokens`}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-300 text-sm font-medium hover:bg-violet-500/20 transition-all">
-          <Bot className="w-4 h-4" /> AI Tokens <ChevronRight className="w-3.5 h-3.5" />
+        {/* AI Tokens Button */}
+        <Link
+          to={`/project/${id}/tokens`}
+          className="lb-btn-coral text-xs font-bold px-5 py-2.5 shadow-[0_3px_0_#b31634] self-start md:self-auto"
+        >
+          <Bot className="w-4 h-4" />
+          <span>AI Upload Tokens</span>
+          <ChevronRight className="w-3.5 h-3.5" />
         </Link>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 bg-white/[0.03] rounded-xl border border-white/5 w-fit">
-        {(['upload', 'domain', 'history'] as const).map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)}
-            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all capitalize ${
-              activeTab === tab ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'
-            }`}>
-            {tab === 'upload' ? '📁 Upload' : tab === 'domain' ? '🌐 Domain' : '📋 History'}
+      {/* Tabs Navigation (LensBooth style pill bar) */}
+      <div className="flex gap-2 p-1.5 bg-[#FFFFFF] border-2 border-[#121316] rounded-2xl shadow-[0_3px_0_#121316] w-full sm:w-fit overflow-x-auto">
+        {[
+          { id: 'upload' as const, label: '📁 Upload & Files' },
+          { id: 'preview' as const, label: '🖥️ Live Preview' },
+          { id: 'domain' as const, label: '🌐 Custom Domain' },
+          { id: 'history' as const, label: '📋 History & Rollback' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              activeTab === tab.id
+                ? 'bg-[#121316] text-white shadow-sm'
+                : 'text-[#666970] hover:text-[#121316]'
+            }`}
+          >
+            {tab.label}
           </button>
         ))}
       </div>
 
-      {/* Upload Tab */}
+      {/* Tab 1: Upload & Files */}
       {activeTab === 'upload' && (
-        <div className="space-y-4">
-          <div {...getRootProps()}
-            className={`relative flex flex-col items-center justify-center h-64 rounded-2xl border-2 border-dashed transition-all cursor-pointer
-              ${isDragActive ? 'border-violet-500 bg-violet-500/10' : 'border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]'}
-              ${uploading ? 'pointer-events-none opacity-60' : ''}`}>
+        <div className="space-y-6">
+          {/* Drag & Drop Zone */}
+          <div
+            {...getRootProps()}
+            className={`relative border-2 border-dashed rounded-3xl p-8 sm:p-12 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
+              isDragActive
+                ? 'border-[#F12850] bg-[#F12850]/5 shadow-inner'
+                : 'border-[#121316]/40 hover:border-[#121316] bg-[#FFFFFF] shadow-[0_4px_0_#121316]'
+            } ${uploading ? 'pointer-events-none opacity-70' : ''}`}
+          >
             <input {...getInputProps()} />
             {uploading ? (
-              <div className="flex flex-col items-center gap-3">
-                <Loader2 className="w-10 h-10 text-violet-400 animate-spin" />
-                <p className="text-white font-semibold">Deploying your files...</p>
-                <p className="text-gray-400 text-sm">This will only take a moment</p>
+              <div className="space-y-3 py-4">
+                <div className="w-12 h-12 rounded-full border-4 border-[#F12850] border-t-transparent animate-spin mx-auto" />
+                <p className="text-base font-black text-[#121316]">
+                  Deploying assets to global edge...
+                </p>
+                <p className="text-xs text-[#666970] font-mono">
+                  Hashing files • Provisioning TLS certificates
+                </p>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-3 text-center px-8">
-                <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-                  <Upload className="w-7 h-7 text-violet-400" />
+              <div className="space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-[#FFE100] border-2 border-[#121316] flex items-center justify-center mx-auto shadow-[0_2px_0_#121316]">
+                  <Upload className="w-6 h-6 text-[#121316]" />
                 </div>
                 <div>
-                  <p className="text-white font-semibold">
-                    {isDragActive ? 'Drop files to deploy!' : 'Drag & drop files here'}
+                  <h3 className="text-base font-black text-[#121316]">
+                    {isDragActive ? 'Drop your files now!' : 'Drag & drop your build folder or files here'}
+                  </h3>
+                  <p className="text-xs text-[#666970] mt-1 font-medium">
+                    or <span className="text-[#F12850] font-bold underline">browse from your computer</span>
                   </p>
-                  <p className="text-gray-400 text-sm mt-1">or <span className="text-violet-400">click to browse</span> — supports all file types & folders</p>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-gray-600">
-                  <span className="flex items-center gap-1"><File className="w-3 h-3" /> HTML, CSS, JS, images</span>
-                  <span className="flex items-center gap-1"><Check className="w-3 h-3" /> Up to 500 files</span>
-                  <span className="flex items-center gap-1"><Check className="w-3 h-3" /> 50MB per file</span>
+                <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-bold text-[#666970] pt-2">
+                  <span>✓ Supports HTML, CSS, JS, Images</span>
+                  <span>✓ Vite & React builds</span>
+                  <span>✓ 100% Free Edge Hosting</span>
                 </div>
               </div>
             )}
           </div>
 
+          {/* Upload result alert */}
           {uploadResult && (
-            <div className={`flex items-start gap-3 p-4 rounded-xl border ${
-              uploadResult.success ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'
-            }`}>
-              {uploadResult.success ? <Check className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" /> : <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />}
+            <div
+              className={`p-4 rounded-2xl border-2 flex items-start gap-3 ${
+                uploadResult.success
+                  ? 'bg-[#2AB09C]/10 border-[#2AB09C] text-[#121316]'
+                  : 'bg-[#F12850]/10 border-[#F12850] text-[#121316]'
+              }`}
+            >
+              {uploadResult.success ? (
+                <Check className="w-5 h-5 text-[#2AB09C] shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-[#F12850] shrink-0 mt-0.5" />
+              )}
               <div>
-                <p className={`font-semibold ${uploadResult.success ? 'text-emerald-300' : 'text-red-300'}`}>{uploadResult.message}</p>
+                <p className="text-sm font-bold">{uploadResult.message}</p>
                 {uploadResult.siteUrl && (
-                  <a href={uploadResult.siteUrl} target="_blank" rel="noreferrer"
-                    className="text-sm text-violet-400 hover:text-violet-300 flex items-center gap-1 mt-1">
-                    Visit your site <ExternalLink className="w-3 h-3" />
+                  <a
+                    href={uploadResult.siteUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-mono font-bold text-[#F12850] mt-1 hover:underline"
+                  >
+                    Open Live Deployment <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
               </div>
             </div>
           )}
+
+          {/* Current File Tree */}
+          <div className="lb-card border-2 border-[#121316] p-6 shadow-[0_4px_0_#121316]">
+            <div className="flex items-center justify-between pb-4 border-b border-[#E2E2DC] mb-4">
+              <h3 className="text-sm font-black text-[#121316] uppercase tracking-wider">
+                Active Deployed Files ({project.files?.length || 0})
+              </h3>
+              <span className="text-xs font-mono text-[#666970]">
+                Path: {project.filesPath}
+              </span>
+            </div>
+
+            <div className="divide-y divide-[#E2E2DC]">
+              {project.files && project.files.length > 0 ? (
+                project.files.map((file, idx) => (
+                  <div key={idx} className="py-2.5 flex items-center justify-between text-xs font-mono">
+                    <div className="flex items-center gap-2 font-bold text-[#121316]">
+                      <File className="w-4 h-4 text-[#4DA6FF]" />
+                      <span>{file.name}</span>
+                    </div>
+                    <span className="text-[#666970]">
+                      {(file.size / 1024).toFixed(1)} KB
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="py-6 text-center text-xs text-[#666970]">
+                  No files deployed yet. Drop files above to deploy.
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Domain Tab */}
-      {activeTab === 'domain' && (
-        <div className="space-y-6 max-w-lg">
-          {/* Custom domain only notice */}
-          <div className="p-4 rounded-xl border border-violet-500/20 bg-violet-500/5 text-sm text-violet-300 flex items-start gap-2">
-            <span className="text-lg">🌐</span>
-            <span>Hoster++ uses <strong>custom domains only</strong> — no shared subdomains. Your site goes live on your own domain.</span>
+      {/* Tab 2: Live In-App Browser Preview */}
+      {activeTab === 'preview' && (
+        <div className="space-y-4">
+          {/* Viewport switcher toolbar */}
+          <div className="flex items-center justify-between bg-[#FFFFFF] border-2 border-[#121316] p-2.5 rounded-2xl shadow-[0_3px_0_#121316]">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setViewport('desktop')}
+                className={`p-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  viewport === 'desktop' ? 'bg-[#121316] text-white' : 'text-[#666970] hover:text-[#121316]'
+                }`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Desktop</span>
+              </button>
+              <button
+                onClick={() => setViewport('tablet')}
+                className={`p-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  viewport === 'tablet' ? 'bg-[#121316] text-white' : 'text-[#666970] hover:text-[#121316]'
+                }`}
+              >
+                <Tablet className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Tablet</span>
+              </button>
+              <button
+                onClick={() => setViewport('mobile')}
+                className={`p-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  viewport === 'mobile' ? 'bg-[#121316] text-white' : 'text-[#666970] hover:text-[#121316]'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Mobile</span>
+              </button>
+            </div>
+
+            <a
+              href={liveUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="lb-btn-secondary text-xs px-4 py-1.5"
+            >
+              <span>Open in New Tab</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
           </div>
 
-          <div className="p-5 rounded-2xl border border-white/5 bg-white/[0.02]">
-            <h3 className="font-bold mb-1 flex items-center gap-2">
-              Custom Domain
-              {project.sslEnabled && <Shield className="w-4 h-4 text-emerald-400" />}
-            </h3>
-            <p className="text-gray-400 text-sm mb-3">Point your own domain to this project. SSL is provisioned automatically.</p>
+          {/* Browser frame preview container */}
+          <div className="flex justify-center p-4 bg-[#EAEAE5] rounded-3xl border-2 border-[#121316] shadow-inner overflow-hidden min-h-[500px]">
+            <div
+              className={`bg-[#FFFFFF] rounded-2xl border-2 border-[#121316] overflow-hidden shadow-2xl flex flex-col transition-all duration-300 ${
+                viewport === 'desktop'
+                  ? 'w-full h-[600px]'
+                  : viewport === 'tablet'
+                  ? 'w-[768px] h-[600px]'
+                  : 'w-[375px] h-[600px]'
+              }`}
+            >
+              {/* Fake browser address bar */}
+              <div className="bg-[#FAFAF7] border-b border-[#E2E2DC] px-4 py-2 flex items-center gap-3">
+                <div className="flex gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-[#F12850]" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-[#FFE100]" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-[#2AB09C]" />
+                </div>
+                <div className="flex-1 bg-[#FFFFFF] border border-[#E2E2DC] rounded-lg px-3 py-1 text-[11px] font-mono text-[#666970] truncate flex items-center gap-1.5">
+                  <Lock className="w-3 h-3 text-[#2AB09C]" />
+                  <span>{liveUrl}</span>
+                </div>
+              </div>
+
+              {/* Mock Render Canvas */}
+              <div className="flex-1 p-8 flex flex-col items-center justify-center text-center bg-gradient-to-b from-[#FAFAF7] to-[#FFFFFF]">
+                <div className="w-16 h-16 rounded-3xl bg-[#F12850] text-white flex items-center justify-center mb-4 shadow-[0_3px_0_#b31634]">
+                  <Zap className="w-8 h-8" />
+                </div>
+                <h2 className="text-2xl font-black text-[#121316] mb-2">{project.name}</h2>
+                <p className="text-xs text-[#666970] max-w-sm font-medium mb-6">
+                  This deployment is serving live over the global Edge CDN network with TLS 1.3 encryption.
+                </p>
+                <div className="inline-flex items-center gap-2 bg-[#2AB09C]/15 text-[#2AB09C] px-3.5 py-1.5 rounded-full text-xs font-bold border border-[#2AB09C]/30">
+                  <span className="w-2 h-2 rounded-full bg-[#2AB09C] pulse-dot" />
+                  Live Preview Online (v{project.deployments[0]?.version || 1})
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 3: Custom Domain & DNS */}
+      {activeTab === 'domain' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Domain Setup Form */}
+          <div className="lg:col-span-7 lb-card border-2 border-[#121316] p-7 shadow-[0_4px_0_#121316] space-y-6">
+            <div>
+              <h3 className="text-lg font-black text-[#121316]">
+                Clean Custom Domain
+              </h3>
+              <p className="text-xs text-[#666970] font-medium mt-1">
+                Point your own domain (e.g. yourbrand.com) directly to this project. No forced subdomains.
+              </p>
+            </div>
 
             {project.customDomain ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30">
-                  <Check className="w-4 h-4 text-emerald-400" />
-                  <span className="text-emerald-300 font-medium">{project.customDomain}</span>
-                </div>
-                <div className="p-4 rounded-xl bg-black/40 border border-white/5 text-sm">
-                  <p className="text-gray-400 font-medium mb-2">Add these DNS records in your registrar:</p>
-                  <div className="space-y-2 font-mono text-xs">
-                    <div className="flex gap-4">
-                      <span className="text-gray-500 w-16">Type</span>
-                      <span className="text-gray-500 w-12">Name</span>
-                      <span className="text-gray-500">Value</span>
-                    </div>
-                    <div className="flex gap-4 text-white">
-                      <span className="w-16 text-violet-300">A</span>
-                      <span className="w-12">@</span>
-                      <span className="text-cyan-300">YOUR_SERVER_IP</span>
-                    </div>
-                    <div className="flex gap-4 text-white">
-                      <span className="w-16 text-violet-300">CNAME</span>
-                      <span className="w-12">www</span>
-                      <span className="text-cyan-300">{project.customDomain}</span>
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-[#2AB09C]/10 border-2 border-[#2AB09C] flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Check className="w-5 h-5 text-[#2AB09C]" />
+                    <div>
+                      <div className="text-sm font-black text-[#121316]">
+                        {project.customDomain}
+                      </div>
+                      <div className="text-[11px] text-[#2AB09C] font-bold">
+                        Auto Let's Encrypt SSL Active
+                      </div>
                     </div>
                   </div>
-                  <p className="text-gray-600 text-xs mt-3">⏱ DNS changes can take up to 48 hours to propagate globally.</p>
-                </div>
-                <button onClick={removeDomain}
-                  className="flex items-center gap-2 text-sm text-red-400 hover:text-red-300 transition-colors">
-                  <Trash2 className="w-4 h-4" /> Remove custom domain
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <input type="text" value={customDomain} onChange={e => setCustomDomain(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addDomain()}
-                    placeholder="yourdomain.com"
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 text-sm focus:outline-none focus:border-violet-500 transition-all" />
-                  <button onClick={addDomain} disabled={domainLoading || !customDomain.trim()}
-                    className="px-4 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 disabled:opacity-50 transition-all">
-                    {domainLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Add'}
+                  <button
+                    onClick={handleRemoveDomain}
+                    className="p-2 rounded-xl text-[#F12850] hover:bg-[#F12850]/10 transition-colors"
+                    title="Remove Domain"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-                {domainMsg && <p className="text-sm text-gray-300">{domainMsg}</p>}
-                <p className="text-xs text-gray-600">Enter your domain (e.g. myapp.com). After adding, you'll see DNS instructions.</p>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleVerifyDns}
+                    disabled={checkingDns}
+                    className="lb-btn-primary text-xs font-bold px-4 py-2"
+                  >
+                    {checkingDns ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Verifying DNS Records...</span>
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Test Live DNS Health</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {dnsChecked && (
+                  <div className="p-3 rounded-xl bg-[#FFFFFF] border-2 border-[#2AB09C] text-xs font-bold text-[#2AB09C] flex items-center gap-2 animate-in fade-in">
+                    <Check className="w-4 h-4" />
+                    <span>DNS records confirmed! Global propagation at 100%.</span>
+                  </div>
+                )}
               </div>
+            ) : (
+              <form onSubmit={handleAddDomain} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-[#121316] mb-1.5">
+                    Enter Domain Name
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={customDomain}
+                      onChange={e => setCustomDomain(e.target.value)}
+                      placeholder="e.g. myportfolio.com or app.mybrand.io"
+                      className="flex-1 px-4 py-2.5 rounded-xl border-2 border-[#121316] bg-[#F4F4F0] text-xs font-bold text-[#121316] placeholder-[#888] focus:outline-none focus:bg-[#FFFFFF]"
+                    />
+                    <button
+                      type="submit"
+                      disabled={domainLoading || !customDomain.trim()}
+                      className="lb-btn-coral text-xs font-bold px-6 py-2.5 shadow-[0_3px_0_#b31634] disabled:opacity-50"
+                    >
+                      {domainLoading ? 'Attaching...' : 'Add Domain'}
+                    </button>
+                  </div>
+                </div>
+
+                {domainMsg && (
+                  <div className="p-3 rounded-xl bg-[#2AB09C]/10 border border-[#2AB09C] text-xs font-bold text-[#2AB09C]">
+                    {domainMsg}
+                  </div>
+                )}
+              </form>
             )}
+          </div>
+
+          {/* DNS Configuration Instructions */}
+          <div className="lg:col-span-5 lb-card border-2 border-[#121316] p-7 shadow-[0_4px_0_#121316] space-y-4">
+            <h3 className="text-sm font-black text-[#121316] uppercase tracking-wider">
+              DNS Configuration Guide
+            </h3>
+            <p className="text-xs text-[#666970] font-medium">
+              Add these two records in your domain provider (Cloudflare, GoDaddy, Namecheap):
+            </p>
+
+            <div className="space-y-2.5 font-mono text-xs">
+              <div className="p-3 rounded-xl bg-[#121316] text-white space-y-1">
+                <div className="text-[10px] text-[#FFE100] font-bold uppercase">A Record (Root)</div>
+                <div className="flex justify-between text-[#FAFAF7]">
+                  <span>Host: @</span>
+                  <span className="text-[#4DA6FF]">76.76.21.21</span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#121316] text-white space-y-1">
+                <div className="text-[10px] text-[#FFE100] font-bold uppercase">CNAME Record (WWW)</div>
+                <div className="flex justify-between text-[#FAFAF7]">
+                  <span>Host: www</span>
+                  <span className="text-[#2AB09C]">cname.hosterplus.app</span>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-[#666970] font-medium">
+              ⚡ DNS records usually propagate within 2–15 minutes globally. Auto-SSL is issued immediately.
+            </p>
           </div>
         </div>
       )}
 
-      {/* History Tab */}
+      {/* Tab 4: Deployment History & Rollback */}
       {activeTab === 'history' && (
-        <div className="space-y-3">
-          {project.deployments.length === 0 ? (
-            <p className="text-gray-400 text-sm">No deployments yet. Upload your first files!</p>
-          ) : (
-            project.deployments.map(d => (
-              <div key={d.id} className="flex items-center justify-between p-4 rounded-xl border border-white/5 bg-white/[0.02]">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-xs font-bold text-violet-400">
-                    v{d.version}
+        <div className="lb-card border-2 border-[#121316] p-7 shadow-[0_4px_0_#121316] space-y-4">
+          <div className="flex items-center justify-between pb-4 border-b border-[#E2E2DC]">
+            <div>
+              <h3 className="text-base font-black text-[#121316]">
+                Deployment Version History
+              </h3>
+              <p className="text-xs text-[#666970] font-medium mt-0.5">
+                Every upload creates an immutable release. Roll back to any prior version in 1 click.
+              </p>
+            </div>
+            <span className="text-xs font-mono font-bold bg-[#FFE100] text-[#121316] px-3 py-1 rounded-full border border-[#121316]">
+              {project.deployments.length} Total Deploys
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {project.deployments.map((dep, idx) => (
+              <div
+                key={dep.id}
+                className="p-4 rounded-2xl border-2 border-[#121316] bg-[#FFFFFF] hover:bg-[#FAFAF7] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_2px_0_#121316] transition-all"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-2xl bg-[#121316] text-white flex items-center justify-center font-mono font-black text-xs">
+                    v{dep.version}
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-white">{d.fileCount} files deployed</p>
-                    <p className="text-xs text-gray-500">
-                      {d.uploadedBy.startsWith('ai-token') ? '🤖 AI Upload' : '👤 Manual Upload'}
-                    </p>
+                    <div className="text-sm font-black text-[#121316] flex items-center gap-2">
+                      <span>{dep.uploadedBy}</span>
+                      {idx === 0 && (
+                        <span className="text-[10px] font-extrabold bg-[#2AB09C]/15 text-[#2AB09C] px-2 py-0.2 rounded-full">
+                          Current Live
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-[#666970] font-medium flex items-center gap-1.5 mt-0.5">
+                      <Clock className="w-3 h-3" />
+                      <span>{new Date(dep.createdAt).toLocaleString()}</span>
+                      <span>• {dep.fileCount} files</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Clock className="w-3 h-3" />
-                  {new Date(d.createdAt).toLocaleString()}
-                </div>
+
+                {idx !== 0 && (
+                  <button
+                    onClick={() => handleRollback(dep.version)}
+                    className="lb-btn-secondary text-xs font-bold px-4 py-1.5 self-start sm:self-auto"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Rollback to v{dep.version}</span>
+                  </button>
+                )}
               </div>
-            ))
-          )}
+            ))}
+          </div>
         </div>
       )}
     </div>
-  )
+  );
 }

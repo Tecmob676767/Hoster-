@@ -1,67 +1,95 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Landing from './pages/Landing';
 import Dashboard from './pages/Dashboard';
 import ProjectPage from './pages/ProjectPage';
 import AITokenPage from './pages/AITokenPage';
 import Layout from './components/Layout';
-import PlumineSplash from './components/PlumineSplash';
-import PlumineCanvas from './components/PlumineCanvas';
-
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  avatar?: string;
-  plan: string;
-}
+import { api } from './services/api';
+import type { User } from './services/store';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [splashDone, setSplashDone] = useState(false);
 
   useEffect(() => {
-    fetch('http://localhost:4000/auth/me', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.authenticated) setUser(data.user);
+    // Zero-localhost: uses api service with resilient local store sync
+    api.getCurrentUser()
+      .then(u => {
+        setUser(u);
       })
-      .catch(() => {})
-      .finally(() => setAuthLoading(false));
+      .finally(() => {
+        setAuthLoading(false);
+      });
   }, []);
 
-  const handleSplashDone = useCallback(() => setSplashDone(true), []);
+  const handleLoginSuccess = (u: User) => {
+    setUser(u);
+  };
 
-  if (!splashDone) {
-    return <PlumineSplash onDone={handleSplashDone} />;
-  }
+  const handleLogout = async () => {
+    await api.logout();
+    setUser(null);
+  };
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-        <PlumineCanvas />
-        <div className="w-10 h-10 border-2 border-violet-500 border-t-transparent rounded-full animate-spin relative z-10" />
+      <div className="min-h-screen bg-[#F4F4F0] flex flex-col items-center justify-center">
+        <div className="w-10 h-10 rounded-full border-4 border-[#F12850] border-t-transparent animate-spin" />
+        <p className="text-xs font-black uppercase tracking-wider text-[#121316] mt-4">
+          Booting Hoster++ Studio...
+        </p>
       </div>
     );
   }
 
   return (
     <BrowserRouter>
-      <div className="relative min-h-screen bg-[#0a0a0a] text-white">
-        <PlumineCanvas />
-        <div className="relative z-10">
-          <Routes>
-            <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Landing />} />
-            <Route element={<Layout user={user} setUser={setUser} />}>
-              <Route path="/dashboard" element={user ? <Dashboard user={user} /> : <Navigate to="/" />} />
-              <Route path="/project/:id" element={user ? <ProjectPage user={user} /> : <Navigate to="/" />} />
-              <Route path="/project/:id/tokens" element={user ? <AITokenPage user={user} /> : <Navigate to="/" />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </div>
-      </div>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <Landing
+              user={user}
+              onLoginSuccess={handleLoginSuccess}
+              onLogout={handleLogout}
+            />
+          }
+        />
+        <Route element={<Layout user={user} setUser={setUser} />}>
+          <Route
+            path="/dashboard"
+            element={
+              user ? (
+                <Dashboard user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/project/:id"
+            element={
+              user ? (
+                <ProjectPage user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/project/:id/tokens"
+            element={
+              user ? (
+                <AITokenPage user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </BrowserRouter>
   );
 }

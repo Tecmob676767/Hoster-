@@ -1,238 +1,376 @@
-import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import type { User } from '../App'
-import { ArrowLeft, Bot, Plus, Copy, Check, Trash2, Eye, EyeOff, Clock, AlertCircle, Loader2, Terminal } from 'lucide-react'
+import { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import type { User, AIToken } from '../services/store';
+import { api } from '../services/api';
+import {
+  ArrowLeft, Bot, Plus, Copy, Check, Trash2, Eye, EyeOff, Clock,
+  Loader2
+} from 'lucide-react';
 
-interface TokenInfo {
-  id: string; name: string; projectId: string; projectName: string
-  expiresAt: string; usedAt?: string; revoked: boolean
-  createdAt: string; tokenPreview: string
+interface Props {
+  user: User;
 }
-
-interface RevealedToken {
-  [id: string]: string
-}
-
-interface Props { user: User }
 
 export default function AITokenPage({ user: _user }: Props) {
-  const { id } = useParams<{ id: string }>()
-  const [tokens, setTokens] = useState<TokenInfo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [creating, setCreating] = useState(false)
-  const [tokenName, setTokenName] = useState('')
-  const [expiresIn, setExpiresIn] = useState('1h')
-  const [newToken, setNewToken] = useState<{ token: string; usage: { example: string; endpoint: string } } | null>(null)
-  const [revealed, setRevealed] = useState<RevealedToken>({})
-  const [copied, setCopied] = useState<string | null>(null)
-  const [revoking, setRevoking] = useState<string | null>(null)
+  const { id } = useParams<{ id: string }>();
+  const [tokens, setTokens] = useState<AIToken[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [tokenName, setTokenName] = useState('');
+  const [expiresIn, setExpiresIn] = useState('7d');
+  const [snippetTab, setSnippetTab] = useState<'curl' | 'python' | 'node'>('curl');
+  const [newToken, setNewToken] = useState<{ token: AIToken; usage: { example: string } } | null>(null);
+  const [revealed, setRevealed] = useState<{ [id: string]: boolean }>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const fetchTokens = () => {
-    fetch(`http://localhost:4000/api/tokens?projectId=${id}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => { setTokens(Array.isArray(data) ? data : []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }
+  const fetchTokens = async () => {
+    if (!id) return;
+    setLoading(true);
+    const data = await api.getTokens(id);
+    setTokens(data);
+    setLoading(false);
+  };
 
-  useEffect(() => { fetchTokens() }, [id])
+  useEffect(() => {
+    fetchTokens();
+  }, [id]);
 
-  const createToken = async () => {
-    if (!tokenName.trim() || !id) return
-    setCreating(true)
-    const res = await fetch('http://localhost:4000/api/tokens', {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: id, name: tokenName.trim(), expiresIn }),
-    })
-    const data = await res.json()
-    if (res.ok) {
-      setNewToken(data)
-      setTokenName('')
-      fetchTokens()
-    }
-    setCreating(false)
-  }
+  const handleCreateToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenName.trim() || !id) return;
+    setCreating(true);
+    const res = await api.createToken(id, tokenName.trim(), expiresIn);
+    setNewToken(res);
+    setTokenName('');
+    await fetchTokens();
+    setCreating(false);
+  };
 
-  const revealToken = async (tokenId: string) => {
-    if (revealed[tokenId]) {
-      setRevealed(prev => { const n = { ...prev }; delete n[tokenId]; return n })
-      return
-    }
-    const res = await fetch(`http://localhost:4000/api/tokens/${tokenId}/reveal`, { credentials: 'include' })
-    const data = await res.json()
-    if (res.ok) setRevealed(prev => ({ ...prev, [tokenId]: data.token }))
-  }
+  const handleCopy = async (text: string, key: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
 
-  const copyText = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text)
-    setCopied(key)
-    setTimeout(() => setCopied(null), 2000)
-  }
+  const handleRevoke = async (tokenId: string) => {
+    if (!confirm('Revoke this token? AI agents using it will immediately lose upload access.')) return;
+    await api.revokeToken(tokenId);
+    await fetchTokens();
+  };
 
-  const revokeToken = async (tokenId: string) => {
-    if (!confirm('Revoke this token? AI agents using it will lose access immediately.')) return
-    setRevoking(tokenId)
-    await fetch(`http://localhost:4000/api/tokens/${tokenId}`, { method: 'DELETE', credentials: 'include' })
-    fetchTokens()
-    setRevoking(null)
-  }
+  const getSnippets = (tokenStr: string) => {
+    return {
+      curl: `curl -X POST "https://hosterplus.app/api/upload/${id || 'PROJECT_ID'}" \\
+  -H "Authorization: Bearer ${tokenStr}" \\
+  -F "files[]=@index.html" \\
+  -F "files[]=@style.css" \\
+  -F "files[]=@app.js"`,
+      python: `import requests
 
-  const isExpired = (exp: string) => new Date(exp) < new Date()
+url = "https://hosterplus.app/api/upload/${id || 'PROJECT_ID'}"
+headers = {"Authorization": "Bearer ${tokenStr}"}
+files = [
+    ('files', ('index.html', open('index.html', 'rb'), 'text/html')),
+    ('files', ('style.css', open('style.css', 'rb'), 'text/css')),
+]
+
+response = requests.post(url, headers=headers, files=files)
+print(response.json())`,
+      node: `const FormData = require('form-data');
+const fs = require('fs');
+const fetch = require('node-fetch');
+
+const form = new FormData();
+form.append('files', fs.createReadStream('index.html'));
+form.append('files', fs.createReadStream('style.css'));
+
+fetch('https://hosterplus.app/api/upload/${id || 'PROJECT_ID'}', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer ${tokenStr}',
+    ...form.getHeaders()
+  },
+  body: form
+})
+.then(res => res.json())
+.then(data => console.log('Deployed:', data));`,
+    };
+  };
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
-        <Link to={`/project/${id}`} className="p-2 rounded-xl border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition-all">
-          <ArrowLeft className="w-4 h-4" />
-        </Link>
-        <div>
-          <h1 className="text-2xl font-black text-white flex items-center gap-2">
-            <Bot className="w-6 h-6 text-cyan-400" /> AI Upload Tokens
-          </h1>
-          <p className="text-gray-400 text-sm mt-1">Generate tokens for AI agents to deploy files automatically</p>
+    <div className="space-y-6 animate-in fade-in duration-150">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#E2E2DC]">
+        <div className="flex items-start gap-3">
+          <Link
+            to={`/project/${id}`}
+            className="p-2 rounded-2xl border-2 border-[#121316] bg-[#FFFFFF] hover:bg-[#F4F4F0] text-[#121316] shadow-[0_2px_0_#121316] transition-all shrink-0 mt-0.5"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div>
+            <div className="inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-[#666970] mb-0.5">
+              <Bot className="w-3.5 h-3.5 text-[#FF6DE4]" />
+              AI Headless Automation
+            </div>
+            <h1 className="text-2xl font-black text-[#121316]">AI Upload Tokens</h1>
+            <p className="text-xs text-[#666970] font-medium mt-0.5">
+              Generate secure API tokens so AI agents can deploy directly to your website.
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* How it works */}
-      <div className="p-5 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 mb-6">
-        <h3 className="font-bold text-cyan-300 mb-2 flex items-center gap-2">
-          <Terminal className="w-4 h-4" /> How AI Token Upload Works
+      {/* How It Works Guide Box (LensBooth styled) */}
+      <div className="lb-card border-2 border-[#121316] bg-[#FFFFFF] p-6 shadow-[0_4px_0_#121316]">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-7 h-7 rounded-xl bg-[#FF6DE4] text-white flex items-center justify-center font-bold text-xs shadow-[0_2px_0_#c93bb0]">
+            ⚡
+          </div>
+          <h3 className="text-sm font-black text-[#121316] uppercase tracking-wider">
+            How Autonomous AI Deployments Work
+          </h3>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-medium text-[#666970] pt-1">
+          <div className="p-3.5 rounded-2xl bg-[#F4F4F0] border border-[#E2E2DC] space-y-1">
+            <div className="font-bold text-[#121316]">1. Generate a Token</div>
+            <p>Pick a lifetime and name (e.g. "Claude Code Assistant").</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-[#F4F4F0] border border-[#E2E2DC] space-y-1">
+            <div className="font-bold text-[#121316]">2. Hand to Your AI Agent</div>
+            <p>Paste the cURL command into Cursor, ChatGPT, or Claude Code prompt.</p>
+          </div>
+          <div className="p-3.5 rounded-2xl bg-[#F4F4F0] border border-[#E2E2DC] space-y-1">
+            <div className="font-bold text-[#121316]">3. Live HTTPS Broadcast</div>
+            <p>The AI deploys your updated build in 1.8s with zero login prompts.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Generate Token Form */}
+      <div className="lb-card border-2 border-[#121316] bg-[#FFFFFF] p-6 shadow-[0_4px_0_#121316] space-y-4">
+        <h3 className="text-base font-black text-[#121316]">
+          Generate New AI Token
         </h3>
-        <ol className="text-sm text-gray-300 space-y-1.5">
-          <li>1. Generate a token below and give it an expiry time</li>
-          <li>2. Copy the token and give it to your AI agent (Claude, GPT, Gemini, etc.)</li>
-          <li>3. The AI sends a POST request with your files — and they're instantly deployed!</li>
-          <li>4. No login required for the AI. The token is all it needs.</li>
-        </ol>
+
+        <form onSubmit={handleCreateToken} className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+          <div className="sm:col-span-6">
+            <input
+              type="text"
+              required
+              value={tokenName}
+              onChange={e => setTokenName(e.target.value)}
+              placeholder="e.g. Claude 3.7 Sonnet Deployer"
+              className="w-full px-4 py-2.5 rounded-xl border-2 border-[#121316] bg-[#F4F4F0] text-xs font-bold text-[#121316] placeholder-[#888] focus:outline-none focus:bg-[#FFFFFF]"
+            />
+          </div>
+
+          <div className="sm:col-span-3">
+            <select
+              value={expiresIn}
+              onChange={e => setExpiresIn(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border-2 border-[#121316] bg-[#F4F4F0] text-xs font-bold text-[#121316] focus:outline-none focus:bg-[#FFFFFF]"
+            >
+              <option value="1h">Expires in 1 Hour</option>
+              <option value="6h">Expires in 6 Hours</option>
+              <option value="24h">Expires in 24 Hours</option>
+              <option value="7d">Expires in 7 Days</option>
+              <option value="30d">Expires in 30 Days</option>
+              <option value="never">Never Expires (Permanent)</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-3">
+            <button
+              type="submit"
+              disabled={creating || !tokenName.trim()}
+              className="w-full lb-btn-coral text-xs font-bold py-2.5 shadow-[0_3px_0_#b31634] disabled:opacity-50"
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Generating...</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Generate Token</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
       </div>
 
-      {/* Create token form */}
-      <div className="p-5 rounded-2xl border border-white/10 bg-white/[0.02] mb-6">
-        <h3 className="font-bold mb-4">Generate New AI Token</h3>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <input type="text" value={tokenName} onChange={e => setTokenName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && createToken()}
-            placeholder='Token name (e.g. "Claude Upload", "GPT Deploy")'
-            className="flex-1 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 text-sm focus:outline-none focus:border-violet-500 transition-all" />
-          <select value={expiresIn} onChange={e => setExpiresIn(e.target.value)}
-            className="px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-violet-500 transition-all">
-            <option value="1h">1 hour</option>
-            <option value="6h">6 hours</option>
-            <option value="24h">24 hours</option>
-            <option value="7d">7 days</option>
-          </select>
-          <button onClick={createToken} disabled={creating || !tokenName.trim()}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition-all whitespace-nowrap">
-            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            Generate Token
-          </button>
-        </div>
-      </div>
-
-      {/* Newly generated token display */}
+      {/* Newly Created Token Display */}
       {newToken && (
-        <div className="p-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-emerald-300 flex items-center gap-2">
-              <Check className="w-4 h-4" /> Token Generated! Copy it now.
-            </h3>
-            <button onClick={() => setNewToken(null)} className="text-gray-500 hover:text-gray-300 text-sm">Dismiss</button>
-          </div>
-          <div className="p-3 rounded-xl bg-black/50 border border-white/10 font-mono text-xs text-violet-300 break-all mb-3 relative">
-            {newToken.token}
-            <button onClick={() => copyText(newToken.token, 'new')}
-              className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all">
-              {copied === 'new' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-gray-400" />}
+        <div className="p-6 rounded-3xl border-2 border-[#121316] bg-[#FFE100] shadow-[0_4px_0_#121316] space-y-4 animate-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-[#121316]" />
+              <h3 className="text-base font-black text-[#121316]">
+                Token Generated Successfully!
+              </h3>
+            </div>
+            <button
+              onClick={() => setNewToken(null)}
+              className="text-xs font-bold text-[#121316] underline"
+            >
+              Dismiss
             </button>
           </div>
-          <p className="text-xs text-gray-400 mb-3 font-medium">Example curl command to give your AI:</p>
-          <div className="p-3 rounded-xl bg-black/50 border border-white/10 font-mono text-xs text-gray-300 break-all relative">
-            <pre className="whitespace-pre-wrap">{newToken.usage.example}</pre>
-            <button onClick={() => copyText(newToken.usage.example, 'curl')}
-              className="absolute top-2 right-2 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all">
-              {copied === 'curl' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-gray-400" />}
+
+          <p className="text-xs font-bold text-[#121316]">
+            Copy this token now. It grants permission to upload files directly to this project.
+          </p>
+
+          <div className="p-3.5 rounded-2xl bg-[#FFFFFF] border-2 border-[#121316] flex items-center justify-between gap-3">
+            <code className="text-xs font-mono font-bold text-[#F12850] truncate">
+              {newToken.token.token}
+            </code>
+            <button
+              onClick={() => handleCopy(newToken.token.token, 'new_tok')}
+              className="lb-btn-primary text-xs font-bold px-3.5 py-1.5 shrink-0"
+            >
+              {copiedKey === 'new_tok' ? <Check className="w-3.5 h-3.5 text-[#2AB09C]" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedKey === 'new_tok' ? 'Copied!' : 'Copy'}</span>
             </button>
+          </div>
+
+          {/* Quick Snippets */}
+          <div>
+            <div className="flex gap-2 mb-2">
+              {(['curl', 'python', 'node'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setSnippetTab(tab)}
+                  className={`px-3 py-1 rounded-lg text-[11px] font-mono font-bold uppercase transition-all ${
+                    snippetTab === tab
+                      ? 'bg-[#121316] text-white'
+                      : 'bg-[#FFFFFF] text-[#121316] border border-[#121316]'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative p-4 rounded-2xl bg-[#121316] text-[#FAFAF7] font-mono text-xs overflow-x-auto">
+              <pre>{getSnippets(newToken.token.token)[snippetTab]}</pre>
+              <button
+                onClick={() => handleCopy(getSnippets(newToken.token.token)[snippetTab], 'snippet')}
+                className="absolute top-3 right-3 p-1.5 rounded-lg bg-[#FFFFFF]/10 hover:bg-[#FFFFFF]/20 text-white transition-colors"
+                title="Copy snippet"
+              >
+                {copiedKey === 'snippet' ? <Check className="w-3.5 h-3.5 text-[#2AB09C]" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Tokens list */}
-      <h3 className="font-bold mb-3 text-gray-300">Active Tokens</h3>
-      {loading ? (
-        <div className="flex items-center gap-2 text-gray-400 text-sm">
-          <Loader2 className="w-4 h-4 animate-spin" /> Loading tokens...
+      {/* Active Tokens List */}
+      <div className="lb-card border-2 border-[#121316] p-7 shadow-[0_4px_0_#121316] space-y-4">
+        <div className="flex items-center justify-between pb-4 border-b border-[#E2E2DC]">
+          <h3 className="text-sm font-black text-[#121316] uppercase tracking-wider">
+            Active Tokens ({tokens.length})
+          </h3>
+          <span className="text-xs font-mono text-[#666970]">
+            Project: {id}
+          </span>
         </div>
-      ) : tokens.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <Bot className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No tokens yet. Generate one above to let AI deploy here.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {tokens.map(t => {
-            const expired = isExpired(t.expiresAt)
-            const dead = t.revoked || expired
-            return (
-              <div key={t.id} className={`p-4 rounded-xl border transition-all ${dead ? 'border-white/5 bg-white/[0.01] opacity-50' : 'border-white/10 bg-white/[0.02]'}`}>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-white text-sm">{t.name}</span>
-                      {t.revoked && (
-                        <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 text-xs border border-red-500/30">Revoked</span>
-                      )}
-                      {!t.revoked && expired && (
-                        <span className="px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 text-xs border border-orange-500/30">Expired</span>
-                      )}
-                      {!dead && (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs border border-emerald-500/30">Active</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                      <Clock className="w-3 h-3" />
-                      Expires: {new Date(t.expiresAt).toLocaleString()}
-                      {t.usedAt && <span className="ml-2">· Last used: {new Date(t.usedAt).toLocaleString()}</span>}
-                    </div>
 
-                    {/* Token preview / reveal */}
-                    {!dead && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <code className="text-xs text-violet-300/60 font-mono truncate max-w-[300px]">
-                          {revealed[t.id] || t.tokenPreview}
-                        </code>
-                        <button onClick={() => revealToken(t.id)}
-                          className="text-gray-500 hover:text-gray-300 transition-colors">
-                          {revealed[t.id] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                        {revealed[t.id] && (
-                          <button onClick={() => copyText(revealed[t.id], t.id)}
-                            className="text-gray-500 hover:text-gray-300 transition-colors">
-                            {copied === t.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                          </button>
+        {loading ? (
+          <div className="py-8 flex items-center justify-center gap-2 text-xs font-bold text-[#666970]">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Loading tokens...
+          </div>
+        ) : tokens.length === 0 ? (
+          <div className="py-8 text-center text-xs text-[#666970]">
+            No tokens generated yet. Generate one above for your AI agent.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {tokens.map(t => {
+              const isRevoked = t.revoked;
+              const isExpired = new Date(t.expiresAt) < new Date();
+              const isDead = isRevoked || isExpired;
+              const isShown = revealed[t.id];
+
+              return (
+                <div
+                  key={t.id}
+                  className={`p-4 rounded-2xl border-2 border-[#121316] transition-all ${
+                    isDead
+                      ? 'bg-[#F4F4F0] opacity-60'
+                      : 'bg-[#FFFFFF] shadow-[0_2px_0_#121316]'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-black text-[#121316]">{t.name}</span>
+                        {isRevoked ? (
+                          <span className="text-[10px] font-bold bg-[#F12850]/15 text-[#F12850] px-2 py-0.2 rounded-full">
+                            Revoked
+                          </span>
+                        ) : isExpired ? (
+                          <span className="text-[10px] font-bold bg-[#FFE100] text-[#121316] px-2 py-0.2 rounded-full border border-[#121316]">
+                            Expired
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold bg-[#2AB09C]/15 text-[#2AB09C] px-2 py-0.2 rounded-full">
+                            Active
+                          </span>
                         )}
                       </div>
+
+                      <div className="flex items-center gap-2 text-xs font-mono text-[#666970]">
+                        <span>{isShown ? t.token : t.tokenPreview}</span>
+                        {!isDead && (
+                          <>
+                            <button
+                              onClick={() => setRevealed(prev => ({ ...prev, [t.id]: !prev[t.id] }))}
+                              className="text-[#121316] hover:text-[#F12850] transition-colors"
+                              title={isShown ? 'Hide' : 'Reveal'}
+                            >
+                              {isShown ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                            <button
+                              onClick={() => handleCopy(t.token, t.id)}
+                              className="text-[#121316] hover:text-[#F12850] transition-colors"
+                              title="Copy Token"
+                            >
+                              {copiedKey === t.id ? <Check className="w-3.5 h-3.5 text-[#2AB09C]" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="text-[11px] text-[#666970] flex items-center gap-1.5 pt-0.5">
+                        <Clock className="w-3 h-3" />
+                        <span>Expires: {new Date(t.expiresAt).toLocaleDateString()}</span>
+                        {t.usedAt && <span>• Last used: {new Date(t.usedAt).toLocaleDateString()}</span>}
+                      </div>
+                    </div>
+
+                    {!isRevoked && (
+                      <button
+                        onClick={() => handleRevoke(t.id)}
+                        className="p-2 rounded-xl text-[#666970] hover:text-[#F12850] hover:bg-[#F12850]/10 transition-colors self-start sm:self-auto"
+                        title="Revoke Token"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     )}
                   </div>
-
-                  {!t.revoked && (
-                    <button onClick={() => revokeToken(t.id)} disabled={revoking === t.id}
-                      className="p-2 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-400/10 transition-all shrink-0">
-                      {revoking === t.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                    </button>
-                  )}
                 </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Warning */}
-      <div className="mt-6 flex items-start gap-2 text-xs text-gray-500">
-        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-        <span>Keep your tokens secret. Anyone with a valid token can deploy files to this project. Revoke unused tokens immediately.</span>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
-  )
+  );
 }
